@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Portfolio Tracker Prototype</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">₿</div>
+        <div>
+          <h1>Portfolio Pilot</h1>
+          <p>Prototype</p>
+        </div>
+      </div>
+
+      <section class="panel">
+        <h2>Accounts</h2>
+        <div class="account-list">
+          <div class="account-card active">
+            <strong>All Accounts</strong>
+            <span>$<span id="sidebar-total">0.00</span></span>
+          </div>
+          <div class="account-card">
+            <strong>Robinhood</strong>
+            <span>Brokerage + Crypto</span>
+          </div>
+          <div class="account-card">
+            <strong>Fidelity</strong>
+            <span>401(k)</span>
+          </div>
+          <div class="account-card">
+            <strong>Coinbase</strong>
+            <span>Crypto</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Watch</h2>
+        <div id="watchlist" class="watchlist"></div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="selection-label">Portfolio</p>
+          <h2 id="selection-title">Total Portfolio</h2>
+        </div>
+        <div class="topbar-actions">
+          <button id="toggle-mode" class="ghost-button">Show $</button>
+          <button class="primary-button" id="demo-reset">Reset Demo Data</button>
+        </div>
+      </header>
+
+      <section class="hero-card">
+        <div class="hero-summary">
+          <div>
+            <div class="total-value">$<span id="current-value">0.00</span></div>
+            <div id="period-change" class="change-line">+$0.00 (0.00%)</div>
+          </div>
+          <div class="range-buttons" id="range-buttons">
+            <button data-range="1D">1D</button>
+            <button data-range="1M">1M</button>
+            <button data-range="3M">3M</button>
+            <button data-range="1Y">1Y</button>
+            <button data-range="ALL" class="active">ALL</button>
+          </div>
+        </div>
+        <canvas id="chart" width="1100" height="420" aria-label="Portfolio performance chart"></canvas>
+        <div class="chart-footer">
+          <div>
+            <span class="dot positive"></span>
+            <span id="chart-caption">Showing percent change from the start of the selected period.</span>
+          </div>
+          <div id="date-range-label"></div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Investments</h2>
+            <span class="subtle">Click a row to inspect performance</span>
+          </div>
+          <table class="holdings-table">
+            <thead>
+              <tr>
+                <th>Asset</th>
+                <th>Shares</th>
+                <th>Value</th>
+                <th>Day</th>
+                <th>All-time</th>
+              </tr>
+            </thead>
+            <tbody id="holdings-body"></tbody>
+          </table>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Insights</h2>
+            <span class="subtle">Demo metrics</span>
+          </div>
+          <div class="stat-grid">
+            <div class="stat-card">
+              <span class="label">Best performer</span>
+              <strong id="best-performer">—</strong>
+              <span id="best-performer-meta" class="subtle"></span>
+            </div>
+            <div class="stat-card">
+              <span class="label">Worst performer</span>
+              <strong id="worst-performer">—</strong>
+              <span id="worst-performer-meta" class="subtle"></span>
+            </div>
+            <div class="stat-card">
+              <span class="label">Accounts connected</span>
+              <strong>3</strong>
+              <span class="subtle">Prototype only</span>
+            </div>
+            <div class="stat-card">
+              <span class="label">Data freshness</span>
+              <strong>Daily snapshot</strong>
+              <span class="subtle">End-of-day demo sync</span>
+            </div>
+          </div>
+
+          <div class="composer">
+            <h3>Prototype controls</h3>
+            <p>Adjust the demo to simulate a new buy or sell. This updates the chart and holdings table locally in your browser.</p>
+            <div class="form-grid">
+              <label>
+                Asset
+                <select id="asset-select"></select>
+              </label>
+              <label>
+                Quantity
+                <input type="number" id="quantity-input" step="0.01" value="1" />
+              </label>
+              <label>
+                Action
+                <select id="action-select">
+                  <option value="buy">Buy</option>
+                  <option value="sell">Sell</option>
+                </select>
+              </label>
+            </div>
+            <button id="apply-transaction" class="primary-button">Apply to demo</button>
+            <div id="transaction-status" class="subtle"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
