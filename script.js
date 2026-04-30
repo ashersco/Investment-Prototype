@@ -1,5 +1,68 @@
-
 const STORAGE_KEY = "portfolio-prototype-state-v1";
+
+async function loadJsonPortfolio() {
+  try {
+    const response = await fetch("data/portfolio.json");
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const raw = await response.json();
+    return normalizeJsonPortfolio(raw);
+  } catch (error) {
+    console.warn("Could not load portfolio.json, falling back to local/demo data.", error);
+    return null;
+  }
+}
+
+function normalizeJsonPortfolio(raw) {
+  if (!raw || !Array.isArray(raw.investments)) {
+    throw new Error("Invalid portfolio JSON: missing investments array.");
+  }
+
+  const assets = raw.investments.map((inv) => ({
+    symbol: inv.symbol,
+    name: inv.name,
+    shares: Number(inv.quantity) || 0
+  }));
+
+  const allDates = [
+    ...new Set(
+      raw.investments.flatMap((inv) =>
+        Array.isArray(inv.history) ? inv.history.map((point) => point.date) : []
+      )
+    )
+  ].sort();
+
+  if (allDates.length === 0) {
+    throw new Error("Invalid portfolio JSON: no history dates found.");
+  }
+
+  const series = allDates.map((date) => {
+    const prices = {};
+
+    raw.investments.forEach((inv) => {
+      const historyPoint = (inv.history || []).find((point) => point.date === date);
+      prices[inv.symbol] = historyPoint ? Number(historyPoint.price) : null;
+    });
+
+    return { date, prices };
+  });
+
+  for (let i = 0; i < series.length; i++) {
+    assets.forEach((asset) => {
+      if (series[i].prices[asset.symbol] == null) {
+        const previous = i > 0 ? series[i - 1].prices[asset.symbol] : null;
+        const nextKnownRow = series.find((row) => row.prices[asset.symbol] != null);
+        const nextKnown = nextKnownRow ? nextKnownRow.prices[asset.symbol] : null;
+        series[i].prices[asset.symbol] = previous ?? nextKnown ?? 0;
+      }
+    });
+  }
+
+  return { assets, series };
+}
 
 const baseAssets = [
   { symbol: "AAPL", name: "Apple", shares: 18.5, startPrice: 176, drift: 0.0006, volatility: 0.018 },
@@ -8,13 +71,13 @@ const baseAssets = [
   { symbol: "NVDA", name: "NVIDIA", shares: 8.2, startPrice: 515, drift: 0.0009, volatility: 0.022 }
 ];
 
-let state = loadState() || createDemoState();
+let state = null;
 let selectedView = "PORTFOLIO";
 let selectedRange = "ALL";
 let chartMode = "percent";
 
 function seededRandom(seed) {
-  let x = Math.sin(seed) * 10000;
+  const x = Math.sin(seed) * 10000;
   return x - Math.floor(x);
 }
 
@@ -59,7 +122,10 @@ function saveState() {
 }
 
 function currency(n) {
-  return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return Number(n).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 }
 
 function pct(n) {
@@ -71,23 +137,32 @@ function classFor(n) {
 }
 
 function rangeDays(range) {
-  if (range === "1D") return 2;
-  if (range === "1M") return 31;
-  if (range === "3M") return 92;
-  if (range === "1Y") return 366;
+  if (!state || !state.series || state.series.length === 0) return 0;
+  if (range === "1D") return Math.min(2, state.series.length);
+  if (range === "1M") return Math.min(31, state.series.length);
+  if (range === "3M") return Math.min(92, state.series.length);
+  if (range === "1Y") return Math.min(366, state.series.length);
   return state.series.length;
 }
 
 function buildPortfolioSeries() {
-  return state.series.map(row => {
-    const total = state.assets.reduce((sum, asset) => sum + row.prices[asset.symbol] * asset.shares, 0);
+  return state.series.map((row) => {
+    const total = state.assets.reduce((sum, asset) => {
+      return sum + (row.prices[asset.symbol] || 0) * asset.shares;
+    }, 0);
+
     return { date: row.date, value: total };
   });
 }
 
 function buildAssetSeries(symbol) {
-  const asset = state.assets.find(a => a.symbol === symbol);
-  return state.series.map(row => ({ date: row.date, value: row.prices[symbol] * asset.shares }));
+  const asset = state.assets.find((a) => a.symbol === symbol);
+  if (!asset) return [];
+
+  return state.series.map((row) => ({
+    date: row.date,
+    value: (row.prices[symbol] || 0) * asset.shares
+  }));
 }
 
 function visibleSeries() {
@@ -97,20 +172,29 @@ function visibleSeries() {
 }
 
 function currentAssetMeta(symbol) {
-  const asset = state.assets.find(a => a.symbol === symbol);
-  const first = state.series[0].prices[symbol];
-  const last = state.series[state.series.length - 1].prices[symbol];
+  const asset = state.assets.find((a) => a.symbol === symbol);
+  if (!asset || state.series.length === 0) {
+    return { value: 0, dayPct: 0, allPct: 0 };
+  }
+
+  const first = state.series[0].prices[symbol] || 0;
+  const last = state.series[state.series.length - 1].prices[symbol] || 0;
+  const previous = state.series.length > 1
+    ? (state.series[state.series.length - 2].prices[symbol] || last)
+    : last;
+
   return {
     value: last * asset.shares,
-    dayPct: ((last - state.series[state.series.length - 2].prices[symbol]) / state.series[state.series.length - 2].prices[symbol]) * 100,
-    allPct: ((last - first) / first) * 100
+    dayPct: previous === 0 ? 0 : ((last - previous) / previous) * 100,
+    allPct: first === 0 ? 0 : ((last - first) / first) * 100
   };
 }
 
 function renderWatchlist() {
   const container = document.getElementById("watchlist");
   container.innerHTML = "";
-  state.assets.forEach(asset => {
+
+  state.assets.forEach((asset) => {
     const meta = currentAssetMeta(asset.symbol);
     const row = document.createElement("div");
     row.className = "watch-row";
@@ -124,10 +208,12 @@ function renderWatchlist() {
         <div class="${classFor(meta.dayPct)}">${pct(meta.dayPct)}</div>
       </div>
     `;
+
     row.addEventListener("click", () => {
       selectedView = asset.symbol;
       render();
     });
+
     container.appendChild(row);
   });
 }
@@ -135,9 +221,11 @@ function renderWatchlist() {
 function renderTable() {
   const body = document.getElementById("holdings-body");
   body.innerHTML = "";
-  state.assets.forEach(asset => {
+
+  state.assets.forEach((asset) => {
     const meta = currentAssetMeta(asset.symbol);
     const tr = document.createElement("tr");
+
     tr.innerHTML = `
       <td>
         <span class="asset-chip">
@@ -153,22 +241,29 @@ function renderTable() {
       <td class="${classFor(meta.dayPct)}">${pct(meta.dayPct)}</td>
       <td class="${classFor(meta.allPct)}">${pct(meta.allPct)}</td>
     `;
+
     tr.addEventListener("click", () => {
       selectedView = asset.symbol;
       render();
     });
+
     body.appendChild(tr);
   });
 }
 
 function renderInsights() {
-  const ranked = state.assets.map(asset => ({
-    symbol: asset.symbol,
-    ...currentAssetMeta(asset.symbol)
-  })).sort((a, b) => b.allPct - a.allPct);
+  const ranked = state.assets
+    .map((asset) => ({
+      symbol: asset.symbol,
+      ...currentAssetMeta(asset.symbol)
+    }))
+    .sort((a, b) => b.allPct - a.allPct);
+
+  if (ranked.length === 0) return;
 
   const best = ranked[0];
   const worst = ranked[ranked.length - 1];
+
   document.getElementById("best-performer").textContent = best.symbol;
   document.getElementById("best-performer-meta").textContent = `${pct(best.allPct)} all-time`;
   document.getElementById("worst-performer").textContent = worst.symbol;
@@ -176,20 +271,26 @@ function renderInsights() {
 }
 
 function dateLabel(series) {
+  if (!series.length) return "";
+
   const start = new Date(series[0].date + "T00:00:00");
   const end = new Date(series[series.length - 1].date + "T00:00:00");
   const opts = { month: "short", day: "numeric", year: "numeric" };
+
   return `${start.toLocaleDateString(undefined, opts)} – ${end.toLocaleDateString(undefined, opts)}`;
 }
 
 function renderSummary() {
   const series = visibleSeries();
   const totalSeries = selectedView === "PORTFOLIO" ? buildPortfolioSeries() : buildAssetSeries(selectedView);
+
+  if (!series.length || !totalSeries.length) return;
+
   const current = totalSeries[totalSeries.length - 1].value;
   const start = series[0].value;
   const end = series[series.length - 1].value;
   const diff = end - start;
-  const diffPct = (diff / start) * 100;
+  const diffPct = start === 0 ? 0 : (diff / start) * 100;
 
   const title = selectedView === "PORTFOLIO" ? "Total Portfolio" : `${selectedView} Position`;
   const label = selectedView === "PORTFOLIO" ? "Portfolio" : "Investment";
@@ -197,15 +298,22 @@ function renderSummary() {
   document.getElementById("selection-title").textContent = title;
   document.getElementById("selection-label").textContent = label;
   document.getElementById("current-value").textContent = currency(current);
+
   const changeEl = document.getElementById("period-change");
   changeEl.className = `change-line ${classFor(diffPct)}`;
-  changeEl.textContent = `${diff >= 0 ? "+" : "-"}$${currency(Math.abs(diff))} (${pct(diffPct).replace("+", diff >= 0 ? "+" : "-")})`;
-  document.getElementById("sidebar-total").textContent = currency(buildPortfolioSeries().slice(-1)[0].value);
+  changeEl.textContent = `${diff >= 0 ? "+" : "-"}$${currency(Math.abs(diff))} (${pct(Math.abs(diffPct)).replace("+", diff >= 0 ? "+" : "-")})`;
+
+  const portfolioSeries = buildPortfolioSeries();
+  document.getElementById("sidebar-total").textContent = portfolioSeries.length
+    ? currency(portfolioSeries[portfolioSeries.length - 1].value)
+    : currency(0);
+
   document.getElementById("date-range-label").textContent = dateLabel(series);
   document.getElementById("chart-caption").textContent =
     chartMode === "percent"
       ? "Showing percent change from the start of the selected period."
       : "Showing dollar value across the selected period.";
+
   document.getElementById("toggle-mode").textContent = chartMode === "percent" ? "Show $" : "Show %";
 }
 
@@ -214,26 +322,38 @@ function drawChart() {
   const ctx = canvas.getContext("2d");
   const series = visibleSeries();
 
+  if (!series.length) return;
+
   const dpr = window.devicePixelRatio || 1;
   const width = canvas.clientWidth;
   const height = Math.round(width * 0.38);
+
   canvas.width = width * dpr;
   canvas.height = height * dpr;
-  ctx.scale(dpr, dpr);
 
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, width, height);
 
   const padding = { top: 18, right: 20, bottom: 28, left: 56 };
   const plotW = width - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
 
-  const values = series.map(p => chartMode === "percent" ? ((p.value / series[0].value) - 1) * 100 : p.value);
+  const baseValue = series[0].value || 1;
+  const values = series.map((p) =>
+    chartMode === "percent" ? ((p.value / baseValue) - 1) * 100 : p.value
+  );
+
   let min = Math.min(...values);
   let max = Math.max(...values);
-  if (min === max) { min -= 1; max += 1; }
 
-  const toX = i => padding.left + (i / (values.length - 1 || 1)) * plotW;
-  const toY = v => padding.top + (1 - (v - min) / (max - min)) * plotH;
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  }
+
+  const toX = (i) => padding.left + (i / (values.length - 1 || 1)) * plotW;
+  const toY = (v) => padding.top + (1 - (v - min) / (max - min)) * plotH;
 
   ctx.strokeStyle = "rgba(255,255,255,0.10)";
   ctx.lineWidth = 1;
@@ -248,12 +368,16 @@ function drawChart() {
 
   ctx.fillStyle = "rgba(163, 174, 208, 0.95)";
   ctx.font = "12px sans-serif";
+
   const ticks = 4;
   for (let i = 0; i < ticks; i++) {
     const ratio = i / (ticks - 1);
     const value = max - (max - min) * ratio;
     const y = padding.top + plotH * ratio;
-    const label = chartMode === "percent" ? `${value.toFixed(1)}%` : `$${Math.round(value).toLocaleString()}`;
+    const label = chartMode === "percent"
+      ? `${value.toFixed(1)}%`
+      : `$${Math.round(value).toLocaleString()}`;
+
     ctx.fillText(label, 8, y + 4);
   }
 
@@ -277,8 +401,11 @@ function drawChart() {
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
+
   const latest = values[values.length - 1];
-  ctx.strokeStyle = latest >= values[0] ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)";
+  ctx.strokeStyle = latest >= values[0]
+    ? "rgba(34,197,94,0.95)"
+    : "rgba(239,68,68,0.95)";
   ctx.lineWidth = 3;
   ctx.stroke();
 
@@ -289,18 +416,27 @@ function drawChart() {
   ctx.fillStyle = "#fff";
   ctx.fill();
 
-  const labelIndexes = [0, Math.floor(values.length * 0.33), Math.floor(values.length * 0.66), values.length - 1];
+  const labelIndexes = [
+    0,
+    Math.floor(values.length * 0.33),
+    Math.floor(values.length * 0.66),
+    values.length - 1
+  ];
+
   labelIndexes.forEach((idx, pos) => {
     const x = toX(idx);
     const date = new Date(series[idx].date + "T00:00:00");
     const opts = selectedRange === "1D"
       ? { hour: "numeric" }
       : { month: "short", day: "numeric" };
+
     ctx.fillStyle = "rgba(163, 174, 208, 0.95)";
     const text = date.toLocaleDateString(undefined, opts);
+
     let offset = -15;
     if (pos === 0) offset = 0;
     if (pos === labelIndexes.length - 1) offset = -40;
+
     ctx.fillText(text, x + offset, height - 8);
   });
 }
@@ -308,14 +444,15 @@ function drawChart() {
 function populateControls() {
   const select = document.getElementById("asset-select");
   select.innerHTML = "";
-  state.assets.forEach(asset => {
+
+  state.assets.forEach((asset) => {
     const option = document.createElement("option");
     option.value = asset.symbol;
     option.textContent = `${asset.symbol} — ${asset.name}`;
     select.appendChild(option);
   });
 
-  document.querySelectorAll("#range-buttons button").forEach(button => {
+  document.querySelectorAll("#range-buttons button").forEach((button) => {
     button.classList.toggle("active", button.dataset.range === selectedRange);
     button.onclick = () => {
       selectedRange = button.dataset.range;
@@ -328,15 +465,27 @@ function applyTransaction() {
   const symbol = document.getElementById("asset-select").value;
   const qty = Number(document.getElementById("quantity-input").value);
   const action = document.getElementById("action-select").value;
-  const asset = state.assets.find(a => a.symbol === symbol);
+
+  if (!qty || qty <= 0) {
+    document.getElementById("transaction-status").textContent = "Enter a quantity greater than 0.";
+    return;
+  }
+
+  const asset = state.assets.find((a) => a.symbol === symbol);
+  if (!asset) return;
+
   const delta = action === "buy" ? qty : -qty;
   asset.shares = Math.max(0, Number((asset.shares + delta).toFixed(4)));
+
   saveState();
-  document.getElementById("transaction-status").textContent = `${action === "buy" ? "Bought" : "Sold"} ${qty} ${symbol} in the local demo state.`;
+  document.getElementById("transaction-status").textContent =
+    `${action === "buy" ? "Bought" : "Sold"} ${qty} ${symbol} in the local state.`;
+
   render();
 }
 
 function render() {
+  if (!state) return;
   populateControls();
   renderWatchlist();
   renderTable();
@@ -352,14 +501,26 @@ document.getElementById("toggle-mode").addEventListener("click", () => {
 
 document.getElementById("apply-transaction").addEventListener("click", applyTransaction);
 
-document.getElementById("demo-reset").addEventListener("click", () => {
-  state = createDemoState();
-  saveState();
+document.getElementById("demo-reset").addEventListener("click", async () => {
+  localStorage.removeItem(STORAGE_KEY);
+
+  const jsonState = await loadJsonPortfolio();
+  state = jsonState || createDemoState();
   selectedView = "PORTFOLIO";
   selectedRange = "ALL";
-  document.getElementById("transaction-status").textContent = "Demo data reset.";
+
+  document.getElementById("transaction-status").textContent = jsonState
+    ? "Reloaded portfolio.json data."
+    : "Demo data reset.";
+
   render();
 });
 
+async function init() {
+  const jsonState = await loadJsonPortfolio();
+  state = jsonState || loadState() || createDemoState();
+  render();
+}
+
 window.addEventListener("resize", drawChart);
-window.addEventListener("load", render);
+window.addEventListener("load", init);
